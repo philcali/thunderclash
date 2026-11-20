@@ -455,6 +455,31 @@ class UpgradeSelectState {
     this.touchHandler = null;
     this.mouseHandler = null;
     this._lastTouchEnd = 0;
+    // Load blessing icons
+    this.iconImages = {};
+    this._iconsReady = false;
+    this._iconPaths = {
+      zeus_fury: './assets/icons/zeus_fury.png',
+      poseidon_tide: './assets/icons/poseidon_tide.png',
+      apollo_light: './assets/icons/apollo_light.png',
+      hermes_swiftness: './assets/icons/hermes_swiftness.png',
+      athena_wisdom: './assets/icons/athena_wisdom.png',
+      ares_rage: './assets/icons/ares_rage.png',
+      artemis_haste: './assets/icons/artemis_haste.png',
+      hephaestus_forge: './assets/icons/hephaestus_forge.png',
+      demeter_bounty: './assets/icons/demeter_bounty.png',
+      new_god: './assets/icons/new_god.png',
+    };
+    Object.entries(this._iconPaths).forEach(([id, path]) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        this.iconImages[id] = img;
+        this._iconsReady = Object.keys(this.iconImages).length === Object.keys(this._iconPaths).length;
+        this._draw();
+      };
+      img.src = path;
+    });
   }
 
   enter() {
@@ -635,10 +660,26 @@ class UpgradeSelectState {
 
       const midX = c.x + L.cardW / 2;
 
-      // Icon
-      ctx.fillStyle = card.color || '#ffd700';
-      ctx.font = `${iconSize}px serif`;
-      ctx.fillText(card.icon, midX, c.y + (compact ? 32 : 60));
+      // Icon — image or fallback emoji
+      const upgradeId = card.id;
+      const iconImg = this.iconImages[upgradeId];
+      const iconSize = compact ? 28 : 42;
+      if (iconImg && iconImg.complete && iconImg.naturalWidth > 0) {
+        ctx.save();
+        const iconY = c.y + (compact ? 28 : 50);
+        ctx.shadowColor = card.color || '#ffd700';
+        ctx.shadowBlur = isHovered ? 10 : 5;
+        ctx.drawImage(iconImg, midX - iconSize / 2, iconY - iconSize / 2, iconSize, iconSize);
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.shadowColor = card.color || '#ffd700';
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = card.color || '#ffd700';
+        ctx.font = `${iconSize}px serif`;
+        ctx.fillText(card.icon, midX, c.y + (compact ? 32 : 60));
+        ctx.restore();
+      }
 
       // Name
       ctx.fillStyle = '#fff';
