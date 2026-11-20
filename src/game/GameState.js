@@ -60,6 +60,26 @@ class MenuState {
     this._startHandler = null;
     this._tapHandler = null;
     this._lastTouchEnd = 0;
+    // Load concept art portraits
+    this.portraitImages = {};
+    this._portraitReady = false;
+    this._portraitPaths = {
+      zeus: './assets/zeus_manga.png',
+      poseidon: './assets/poseidon_manga.png',
+      hades: './assets/hades_manga.png',
+      athena: './assets/athena_manga.png',
+      ares: './assets/ares_manga.png',
+    };
+    Object.entries(this._portraitPaths).forEach(([id, path]) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        this.portraitImages[id] = img;
+        this._portraitReady = Object.keys(this.portraitImages).length === Object.keys(this._portraitPaths).length;
+        this._draw();
+      };
+      img.src = path;
+    });
   }
 
   enter() {
@@ -157,18 +177,21 @@ class MenuState {
     const safe = this.game.safeInsets || { top: 0, bottom: 0 };
     const s = clamp(Math.min(w / 700, h / 820), 0.55, 1);
 
-    const card = Math.min(210, w * 0.52);
-    const cardX = w / 2 - card / 2;
-    const cardY = Math.max(safe.top + 80 * s, h * 0.40);
-    const nav = clamp(card * 0.34, 44, 64); // generous touch target
-    const navY = cardY + card / 2 - nav / 2;
+    const portraitW = Math.min(340, w * 0.75);
+    const portraitH = portraitW * (1024 / 768); // maintain 768x1024 aspect
+    const portraitX = w / 2 - portraitW / 2;
+    const portraitY = Math.max(safe.top + 120 * s, h * 0.18);
+    const infoY = portraitY + portraitH + 20 * s;
+    const nav = clamp(portraitW * 0.22, 44, 64);
+    const navY = portraitY + portraitH / 2 - nav / 2;
 
     return {
       w, h, s,
-      titleY: Math.max(safe.top + 56 * s, h * 0.16),
-      card, cardX, cardY,
-      navLeft: { x: cardX - nav - 16, y: navY, w: nav, h: nav },
-      navRight: { x: cardX + card + 16, y: navY, w: nav, h: nav },
+      titleY: Math.max(safe.top + 40 * s, h * 0.08),
+      portraitW, portraitH, portraitX, portraitY,
+      infoY,
+      navLeft: { x: portraitX - nav - 20, y: navY, w: nav, h: nav },
+      navRight: { x: portraitX + portraitW + 20, y: navY, w: nav, h: nav },
       promptY: h - (safe.bottom + 44),
     };
   }
@@ -203,41 +226,61 @@ class MenuState {
     ctx.font = `${Math.round(15 * s)}px monospace`;
     ctx.fillText('Olympus vs the Underworld', w / 2, L.titleY + 28 * s);
 
-    // God portrait
-    const { card, cardX, cardY } = L;
-    ctx.fillStyle = god.color + '22';
-    ctx.strokeStyle = god.color + '88';
-    ctx.lineWidth = 2;
-    ctx.fillRect(cardX, cardY, card, card);
-    ctx.strokeRect(cardX, cardY, card, card);
-
-    // God color glow
-    ctx.save();
-    ctx.shadowColor = god.color;
-    ctx.shadowBlur = 15;
-    ctx.fillStyle = god.color;
-    ctx.font = `${Math.round(card * 0.32)}px serif`;
-    ctx.fillText(god.icon, w / 2, cardY + card * 0.38);
-    ctx.restore();
+    // God portrait — image or fallback emoji card
+    const { portraitW, portraitH, portraitX, portraitY } = L;
+    const img = this.portraitImages[god.id];
+    if (img && img.complete && img.naturalWidth > 0) {
+      // Draw portrait with subtle glow border matching god color
+      ctx.save();
+      ctx.shadowColor = god.color;
+      ctx.shadowBlur = 20;
+      ctx.strokeStyle = god.color + '66';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(portraitX, portraitY, portraitW, portraitH);
+      ctx.restore();
+      // Draw the image inside the border (clip to rect with slight rounding)
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(portraitX + 2, portraitY + 2, portraitW - 4, portraitH - 4);
+      ctx.clip();
+      ctx.drawImage(img, portraitX, portraitY, portraitW, portraitH);
+      ctx.restore();
+    } else {
+      // Fallback: colored card with emoji
+      const cardW = portraitW;
+      const cardH = portraitH;
+      ctx.fillStyle = god.color + '22';
+      ctx.strokeStyle = god.color + '88';
+      ctx.lineWidth = 2;
+      ctx.fillRect(portraitX, portraitY, cardW, cardH);
+      ctx.strokeRect(portraitX, portraitY, cardW, cardH);
+      ctx.save();
+      ctx.shadowColor = god.color;
+      ctx.shadowBlur = 15;
+      ctx.fillStyle = god.color;
+      ctx.font = `${Math.round(cardH * 0.32)}px serif`;
+      ctx.fillText(god.icon, portraitX + cardW / 2, portraitY + cardH * 0.38);
+      ctx.restore();
+    }
 
     // God name
     ctx.fillStyle = god.color;
     ctx.font = `bold ${Math.round(19 * s)}px monospace`;
-    ctx.fillText(god.name, w / 2, cardY + card * 0.68);
+    ctx.fillText(god.name, w / 2, L.infoY);
 
     // God description (wrapped)
     ctx.fillStyle = '#aaa';
     ctx.font = `${Math.round(12 * s)}px monospace`;
-    const descLines = this._wrapText(ctx, god.description, card - 16);
+    const descLines = this._wrapText(ctx, god.description, portraitW - 16);
     descLines.forEach((line, i) => {
-      ctx.fillText(line, w / 2, cardY + card * 0.82 + i * 15 * s);
+      ctx.fillText(line, w / 2, L.infoY + 22 * s + i * 16 * s);
     });
 
     // God weapon
     const weapon = WEAPONS[god.weapon];
     ctx.fillStyle = '#888';
     ctx.font = `${Math.round(11 * s)}px monospace`;
-    ctx.fillText(`Weapon: ${weapon.name}`, w / 2, cardY + card + 20 * s);
+    ctx.fillText(`Weapon: ${weapon.name}`, w / 2, L.infoY + 22 * s + descLines.length * 16 * s);
 
     // Nav arrows (large touch targets)
     if (multiGod) {
