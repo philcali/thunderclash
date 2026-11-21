@@ -87,6 +87,9 @@ class Renderer {
 
     ctx.restore();
 
+    // Fog of war — radial gradient centered on player's screen position
+    this._drawFogOfWar(ctx, dw, dh, game);
+
     // HUD (screen space, not camera space)
     this._drawHUD(ctx, dw, dh, game);
 
@@ -726,6 +729,33 @@ class Renderer {
     ctx.arc(stick.knobX, stick.knobY, R * 0.45, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
+  }
+
+  // ── Fog of war ───────────────────────────────────────────────
+
+  _drawFogOfWar(ctx, dw, dh, game) {
+    if (!game.player) return;
+
+    // Player's screen position (center of viewport)
+    const px = dw / 2;
+    const py = dh / 2;
+
+    // Fog radius — scales with screen size for consistent feel
+    const fogRadius = Math.min(dw, dh) * 0.45;
+    const fogInner = fogRadius * 0.3; // clear zone around player
+
+    // Darkness intensity — gets darker as you go deeper (wave 21+)
+    const zone = this._getFloorZone(game.waveSystem?.currentWave || 1);
+    // Zone 1-2: light fog, zone 3-4: medium, zone 5: heavy
+    const darkness = 0.35 + zone * 0.12;
+
+    const gradient = ctx.createRadialGradient(px, py, fogInner, px, py, fogRadius);
+    gradient.addColorStop(0, `rgba(10, 10, 20, 0)`);
+    gradient.addColorStop(0.7, `rgba(10, 10, 20, ${darkness * 0.5})`);
+    gradient.addColorStop(1, `rgba(10, 10, 20, ${darkness})`);
+
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, dw, dh);
   }
 
   // ── HUD ──────────────────────────────────────────────────────
