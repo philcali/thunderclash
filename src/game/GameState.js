@@ -2,13 +2,12 @@
  * GameState — state machine for menu, playing, upgrade-select, game-over.
  */
 import { WEAPONS } from '../data/weapons.js';
-import { ENEMY_TYPES } from '../data/enemies.js';
-import { UPGRADES } from '../data/blessings.js';
-import { WAVE_DEFINITIONS, getWaveConfig } from '../data/levels.js';
 import { GODS } from '../data/gods.js';
+import { ABILITIES } from '../data/abilities.js';
 import EntityManager from '../systems/EntityManager.js';
 import Camera from './Camera.js';
 import WeaponSystem from '../systems/WeaponSystem.js';
+import AbilitySystem from '../systems/AbilitySystem.js';
 import WaveSystem from '../systems/WaveSystem.js';
 import ScoreSystem from '../systems/ScoreSystem.js';
 import UpgradeSystem from '../systems/UpgradeSystem.js';
@@ -282,6 +281,14 @@ class MenuState {
     ctx.font = `${Math.round(11 * s)}px monospace`;
     ctx.fillText(`Weapon: ${weapon.name}`, w / 2, L.infoY + 22 * s + descLines.length * 16 * s);
 
+    // God ability (the secondary move)
+    const ability = ABILITIES[god.id];
+    if (ability) {
+      ctx.fillStyle = ability.color;
+      ctx.font = `bold ${Math.round(12 * s)}px monospace`;
+      ctx.fillText(`${ability.icon} ${ability.name} — ${ability.tagline}`, w / 2, L.infoY + 22 * s + (descLines.length + 1) * 16 * s);
+    }
+
     // Nav arrows (large touch targets)
     if (multiGod) {
       ctx.fillStyle = '#888';
@@ -342,6 +349,7 @@ class PlayingState {
       this.game.entityManager = new EntityManager();
       this.game.camera = new Camera();
       this.game.weaponSystem = new WeaponSystem(this.game.player, this.game.entityManager);
+      this.game.abilitySystem = new AbilitySystem(this.game);
       this.game.waveSystem = new WaveSystem(this.game.entityManager, this.game);
       this.game.score = new ScoreSystem();
       this.game.upgradeSystem = new UpgradeSystem();
@@ -376,6 +384,9 @@ class PlayingState {
       if (input.stickMove.used && input.stickAim.used) this.game.hintTimer = 0;
     }
 
+    // (abilitySystem comes from the game object; destructured above)
+    const abilitySystem = this.game.abilitySystem;
+
     // Update movement
     input.updateMoveVector();
     let dx = input.moveX;
@@ -401,6 +412,12 @@ class PlayingState {
 
     // Update weapon system
     weaponSystem.update(dt, aimDir);
+
+    // Ability: tick cooldown/pending effects, then fire on a fresh press
+    if (abilitySystem) {
+      abilitySystem.update(dt);
+      if (input.consumeAbilityPress()) abilitySystem.tryActivate();
+    }
 
     // Update wave system
     waveSystem.update(dt);

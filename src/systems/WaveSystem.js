@@ -175,6 +175,12 @@ class WaveSystem {
     enemy.pushbackX *= 0.9;
     enemy.pushbackY *= 0.9;
 
+    // Stunned (e.g. Zeus Thunder Barrier): frozen in place
+    if (enemy.stunTimer > 0) {
+      enemy.stunTimer -= dt;
+      return;
+    }
+
     // Boss regen
     if (def.regenerates && def.regenRate) {
       enemy.health = Math.min(enemy.maxHealth, enemy.health + def.regenRate * dt);

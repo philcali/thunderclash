@@ -58,17 +58,43 @@ class Game {
     this.safeInsets = { top: 0, right: 0, bottom: 0, left: 0 };
     this.hintTimer = 0; // seconds of on-screen control hints left
 
+    // Floor textures — loaded async, keyed by wave zone
+    this.floorTextures = {};
+    this._floorsReady = false;
+    this._loadFloors();
+
     // Subsystems (populated during PlayingState.enter)
     this.player = null;
     this.entityManager = null;
     this.weaponSystem = null;
+    this.abilitySystem = null;
     this.waveSystem = null;
     this.score = null;
     this.upgradeSystem = null;
   }
 
+  _loadFloors() {
+    const floorPaths = {
+      1: './assets/floors/wave1.png',
+      2: './assets/floors/wave2.png',
+      3: './assets/floors/wave3.png',
+      4: './assets/floors/wave4.png',
+      5: './assets/floors/wave5.png',
+    };
+    Object.entries(floorPaths).forEach(([zone, path]) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        this.floorTextures[zone] = img;
+        this._floorsReady = Object.keys(this.floorTextures).length === Object.keys(floorPaths).length;
+      };
+      img.src = path;
+    });
+  }
+
   async start() {
     this.safeInsets = readSafeInsets();
+    this.input.safeBottom = this.safeInsets.bottom;
     this._resize();
     window.addEventListener('resize', () => this._resize());
     this.stateMachine.enter('menu');

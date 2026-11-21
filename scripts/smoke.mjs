@@ -48,9 +48,21 @@ const canvas = {
   getContext: () => ctxStub,
 };
 
+// Offscreen canvases (enemy sprite baking) + DOM for safe-area probing
+globalThis.Image = class {
+  constructor() { this.complete = false; this.naturalWidth = 0; this.naturalHeight = 0; }
+};
+globalThis.document = {
+  createElement: (tag) => tag === 'canvas'
+    ? { width: 0, height: 0, style: {}, getContext: () => ctxStub, remove: () => {} }
+    : { style: {}, remove: () => {} },
+  body: { appendChild: () => {} },
+};
+
 globalThis.window = {
   innerWidth: 390, innerHeight: 844, devicePixelRatio: 3,
   addEventListener: () => {}, removeEventListener: () => {},
+  getComputedStyle: () => ({}),
 };
 Object.defineProperty(globalThis, 'navigator', {
   value: { maxTouchPoints: 2, vibrate: () => true },
@@ -85,7 +97,7 @@ assert.strictEqual(canvas.width, 390 * 2.5, 'canvas scaled by DPR (capped at 2.5
 console.log('✓ boot + DPR sizing');
 
 // ── Wave data: mediums early, boss every 5 waves ──
-const { getWaveConfig } = await import('../src/data/levels.js');
+const { getWaveConfig, totalForWave } = await import('../src/data/levels.js');
 assert.strictEqual(getWaveConfig(5).boss, 'medusa', 'wave 5 boss = medusa');
 assert.strictEqual(getWaveConfig(10).boss, 'hydra', 'wave 10 boss = hydra');
 assert.strictEqual(getWaveConfig(15).boss, 'medusa', 'wave 15 boss = medusa');
@@ -93,7 +105,18 @@ assert.strictEqual(getWaveConfig(20).boss, 'hydra', 'wave 20 boss = hydra');
 assert.strictEqual(getWaveConfig(25).boss, 'medusa', 'wave 25 (procedural) boss');
 assert.ok(getWaveConfig(5).enemies.minotaur > 0, 'mediums appear by wave 5');
 assert.ok(getWaveConfig(8).enemies.cerberus > 0, 'cerberus appears by wave 8');
-console.log('✓ wave data (mediums early, boss every 5 waves)');
+
+// Ramp A: aggressive geometric growth, monotonic, hard-capped at 1200
+assert.ok(totalForWave(10) > totalForWave(5) * 1.5, `ramp: W10 (${totalForWave(10)}) > 1.5× W5 (${totalForWave(5)})`);
+assert.ok(totalForWave(15) > totalForWave(10) * 1.5, `ramp: W15 (${totalForWave(15)}) > 1.5× W10`);
+assert.ok(totalForWave(20) >= 700, `ramp: W20 ≥ 700 (got ${totalForWave(20)})`);
+assert.ok(totalForWave(21) >= totalForWave(20), 'ramp: monotonic across the cap');
+assert.strictEqual(totalForWave(100), 1200, 'ramp: capped at 1200');
+for (const w of [3, 7, 12, 25, 50]) {
+  const sum = Object.values(getWaveConfig(w).enemies).reduce((a, b) => a + b, 0);
+  assert.strictEqual(sum, totalForWave(w), `wave ${w} composition sums to its total (${sum})`);
+}
+console.log(`✓ wave data (ramp ${totalForWave(1)}→${totalForWave(5)}→${totalForWave(10)}→${totalForWave(20)}→1200 cap, boss every 5)`);
 
 // ── Menu: cycle god with left nav arrow tap ──
 step(2);
@@ -110,6 +133,84 @@ fire('touchend', 195, 700);
 assert.strictEqual(game.stateMachine.name, 'playing', 'tap starts game');
 assert.ok(game.player, 'player created');
 console.log('✓ menu start');
+
+// ── Ability system (the gods' secondary move) ──
+const { GODS } = await import('../src/data/gods.js');
+const em = game.entityManager;
+const ab = game.abilitySystem;
+assert.ok(ab, 'abilitySystem created with the game');
+assert.strictEqual(ab.ability.id, 'thunder_barrier', 'zeus gets Thunder Barrier');
+assert.ok(ab.ready, 'ability starts ready');
+
+// Keep player + world alive while we poke at it
+game.player.invincible = true;
+game.player.invincibleTimer = 1e9;
+for (const e of em.getByType('enemy')) { e.health = 99999; e.maxHealth = 99999; }
+
+// Zeus: damage + stun inside the radius, nothing outside
+const victim = em.create({ type: 'enemy', def: { color: '#fff' }, x: 80, y: 0, radius: 10, health: 99999, maxHealth: 99999, pushbackX: 0, pushbackY: 0 });
+const far = em.create({ type: 'enemy', def: { color: '#fff' }, x: 320, y: 0, radius: 10, health: 99999, maxHealth: 99999, pushbackX: 0, pushbackY: 0 });
+em.update(0.016);
+assert.strictEqual(ab.tryActivate(), true, 'zeus ability activates');
+assert.strictEqual(victim.health, 99999 - 40, 'barrier dealt 40');
+assert.ok(victim.stunTimer > 0, 'victim stunned');
+assert.strictEqual(far.health, 99999, 'out-of-range enemy untouched');
+assert.ok(!ab.ready, 'cooldown running after use');
+em.update(0.016);
+assert.ok(em.getByType('ring').length >= 2, 'shockwave rings spawned');
+
+// Poseidon: three radial bursts of water bullets
+game.player.god = GODS.find((g) => g.id === 'poseidon');
+ab.cooldownRemaining = 0;
+assert.ok(ab.ready, 'ready after cooldown reset');
+assert.strictEqual(ab.tryActivate(), true, 'poseidon ability activates');
+em.update(0.016);
+let wave = em.getByType('projectile').filter((p) => p.projectileType === 'wave').length;
+assert.strictEqual(wave, 12, `first burst fires 12 bullets (got ${wave})`);
+for (let i = 0; i < 30; i++) { ab.update(1 / 60); if (i % 2 === 0) em.update(1 / 60); }
+wave = em.getByType('projectile').filter((p) => p.projectileType === 'wave').length;
+assert.ok(wave >= 24, `bursts 2-3 added their bullets (${wave} total)`);
+
+// Hades: homing soulfire + a persistent burn zone
+game.player.god = GODS.find((g) => g.id === 'hades');
+ab.cooldownRemaining = 0;
+assert.strictEqual(ab.tryActivate(), true, 'hades ability activates');
+em.update(0.016);
+const bolts = em.getByType('projectile').filter((p) => p.projectileType === 'soulfire').length;
+assert.ok(bolts >= 16, `homing bolts spawned (${bolts})`);
+assert.ok(em.getByType('zone').length >= 1, 'burn zone spawned');
+
+// Athena: invulnerability + shield + knockback ring
+game.player.god = GODS.find((g) => g.id === 'athena');
+ab.cooldownRemaining = 0;
+game.player.shield = 0;
+for (const e of em.getByType('enemy')) { e.pushbackX = 0; e.pushbackY = 0; }
+assert.strictEqual(ab.tryActivate(), true, 'athena ability activates');
+assert.ok(game.player.invincible, 'aegis grants i-frames');
+assert.ok(game.player.shield >= 30, 'aegis grants shield');
+assert.ok(
+  em.getByType('enemy').some((e) => Math.abs(e.pushbackX) > 10 || Math.abs(e.pushbackY) > 10),
+  'enemies in the ring were shoved'
+);
+
+// Ares: aimed cone (auto-aims at the nearest enemy when no manual aim)
+game.player.god = GODS.find((g) => g.id === 'ares');
+ab.cooldownRemaining = 0;
+const victim3 = em.create({ type: 'enemy', def: { color: '#fff' }, x: 200, y: 0, radius: 10, health: 99999, maxHealth: 99999, pushbackX: 0, pushbackY: 0 });
+em.update(0.016);
+assert.strictEqual(ab.tryActivate(), true, 'ares ability activates');
+assert.strictEqual(victim3.health, 99999 - 90, 'wrath dealt 90');
+assert.ok(victim3.pushbackX > 10, 'wrath slammed the enemy back');
+
+// Mobile: tapping the fixed button queues a press (and no aim stick)
+const btn = game.input.abilityButtonRect();
+fire('touchstart', btn.cx, btn.cy, 9);
+assert.ok(game.input.abilityPressed, 'button tap queues the ability');
+assert.strictEqual(game.input.stickAim.active, false, 'button tap does not spawn the aim stick');
+assert.ok(game.input.consumeAbilityPress(), 'press consumes once');
+assert.strictEqual(game.input.consumeAbilityPress(), false, '…and only once');
+fire('touchend', btn.cx, btn.cy, 9);
+console.log('✓ ability system (5 gods, cooldown, button)');
 
 // ── Playing: virtual sticks ──
 fire('touchstart', 80, 600, 7);   // left half → move stick
@@ -176,7 +277,8 @@ assert.strictEqual(houndsAfter, houndsBefore + 2, 'cerberus splits into 2 hellho
 console.log('✓ cerberus → hellhounds');
 
 // ── Contact damage (regression: was `enemy.damage` undefined → NaN hp → immortal) ──
-const cerb2 = game.entityManager.getByType('enemy').find((e) => e.enemyType === 'cerberus');
+let cerb2 = game.entityManager.getByType('enemy').find((e) => e.enemyType === 'cerberus');
+if (!cerb2) cerb2 = ws.spawnEnemyAt('cerberus', 60, 60);
 assert.ok(cerb2, 'a living cerberus exists for the contact test');
 game.player.invincible = false;
 game.player.invincibleTimer = 0;

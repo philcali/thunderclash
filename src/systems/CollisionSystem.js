@@ -24,9 +24,11 @@ class CollisionSystem {
         if (enemiesToRemove.has(enemy)) continue;
         if (this.circleCollision(proj, enemy)) {
           enemy.health -= proj.damage;
-          // Pushback
-          enemy.pushbackX += (proj.vx / Math.abs(proj.vx || 1)) * 5;
-          enemy.pushbackY += (proj.vy / Math.abs(proj.vy || 1)) * 5;
+          // Pushback (direction along the projectile, magnitude per-projectile)
+          const pSpeed = Math.sqrt(proj.vx * proj.vx + proj.vy * proj.vy) || 1;
+          const kb = proj.knockback || 5;
+          enemy.pushbackX += (proj.vx / pSpeed) * kb;
+          enemy.pushbackY += (proj.vy / pSpeed) * kb;
 
           // Spawn hit particles
           this._spawnHit(entityManager, proj.x, proj.y, enemy.color, 5);

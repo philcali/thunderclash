@@ -74,6 +74,10 @@ class Input {
     this.touchMoveId = null;
     this.touchAimActive = false;
 
+    // Ability trigger: edge-detection flag, consumed once per press
+    this.abilityPressed = false;
+    this.safeBottom = 0; // safe-area bottom inset (set by Game.start)
+
     this._deadzone = 0.15;    // fraction of stick radius with no output
     this._aimEngage = 0.22;   // fraction of radius required to count as aiming
     this._bindEvents();
@@ -88,10 +92,40 @@ class Input {
     return clamp(m * 0.17, 40, 64);
   }
 
+  /** Fixed ability button (bottom-right, above the safe-area inset). */
+  abilityButtonRect() {
+    const w = this.displayWidth;
+    const h = this.displayHeight;
+    const r = clamp(Math.min(w, h) * 0.10, 26, 40);
+    return { cx: w - r - 20, cy: h - (this.safeBottom || 0) - r - 20, r };
+  }
+
+  /** True if the touch point lands on the ability button (with slop). */
+  _touchOnAbilityButton(x, y) {
+    const b = this.abilityButtonRect();
+    const slop = b.r + 8;
+    const dx = x - b.cx;
+    const dy = y - b.cy;
+    return dx * dx + dy * dy <= slop * slop;
+  }
+
+  /** Consume a pending ability press (keyboard Space/E or button tap). */
+  consumeAbilityPress() {
+    const pressed = this.abilityPressed;
+    this.abilityPressed = false;
+    return pressed;
+  }
+
   _bindEvents() {
     // Keyboard
     window.addEventListener('keydown', (e) => {
-      this.keys[e.key.toLowerCase()] = true;
+      const k = e.key.toLowerCase();
+      this.keys[k] = true;
+      // Ability: Space or E (edge-triggered, ignore auto-repeat)
+      if (!e.repeat && (k === ' ' || k === 'e')) {
+        this.abilityPressed = true;
+        if (k === ' ') e.preventDefault(); // avoid page scroll
+      }
     });
     window.addEventListener('keyup', (e) => {
       this.keys[e.key.toLowerCase()] = false;
@@ -126,6 +160,12 @@ class Input {
   }
 
   _handleTouchStart(touch) {
+    // Ability button takes priority over the sticks (it sits in the
+    // bottom-right; a touch there must not also spawn an aim stick).
+    if (this._touchOnAbilityButton(touch.clientX, touch.clientY)) {
+      this.abilityPressed = true;
+      return;
+    }
     const half = this.displayWidth / 2;
     if (touch.clientX < half) {
       if (!this.stickMove.active) this.stickMove.start(touch.identifier, touch.clientX, touch.clientY);
@@ -178,6 +218,7 @@ class Input {
   resetTouchSticks() {
     this.stickMove.reset();
     this.stickAim.reset();
+    this.abilityPressed = false;
     this.moveX = 0;
     this.moveY = 0;
     this._syncCompatFlags();

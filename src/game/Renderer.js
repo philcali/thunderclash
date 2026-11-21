@@ -10,6 +10,10 @@ class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    // Baked enemy sprites (offscreen canvases), keyed by type:radius:color.
+    // shadowBlur is the expensive part — baking it once per variant turns
+    // 500+ enemies from ~2000 glow passes into ~500 cheap drawImages.
+    this._enemySprites = new Map();
   }
 
   get displayWidth() {
@@ -54,12 +58,17 @@ class Renderer {
     ctx.translate(-camera.x, -camera.y);
 
     // Marble grid floor
-    this._drawGrid(ctx, camera, dw, dh);
+    this._drawGrid(ctx, camera, dw, dh, game);
 
     // Collect entities by layer
     const projectiles = entityManager.getByType('projectile');
     const enemies = entityManager.getByType('enemy');
     const particles = entityManager.getByType('particle');
+    const zones = entityManager.getByType('zone');
+    const rings = entityManager.getByType('ring');
+
+    // Ability zones (ground layer, under everything)
+    this._drawZones(ctx, zones);
 
     // Draw enemies (behind player)
     this._drawEnemies(ctx, enemies, game);
@@ -69,6 +78,9 @@ class Renderer {
 
     // Draw projectiles
     this._drawProjectiles(ctx, projectiles);
+
+    // Ability shockwave rings (above projectiles)
+    this._drawRings(ctx, rings);
 
     // Draw particles (on top)
     this._drawParticles(ctx, particles);
@@ -83,6 +95,9 @@ class Renderer {
 
     // Virtual sticks + control hints (screen space)
     this._drawSticks(ctx, dw, dh, game);
+
+    // Ability button (screen space, bottom-right)
+    this._drawAbilityButton(ctx, game);
   }
 
   /** Boss health bar (top center) + "X APPROACHES" banner. */
@@ -137,118 +152,102 @@ class Renderer {
     }
   }
 
+  /** Floor zone from wave number — zones 1-5 map to floor textures. */
+  _getFloorZone(waveNumber) {
+    if (waveNumber <= 5) return 1;
+    if (waveNumber <= 10) return 2;
+    if (waveNumber <= 15) return 3;
+    if (waveNumber <= 20) return 4;
+    return 5;
+  }
+
   // ── Grid (marble floor) ──────────────────────────────────────
 
-  _drawGrid(ctx, camera, viewWidth, viewHeight) {
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255, 215, 0, 0.03)';
-    ctx.lineWidth = 0.5 / camera.zoom;
+  _drawGrid(ctx, camera, viewWidth, viewHeight, game) {
+    const { waveSystem, floorTextures, _floorsReady } = game;
+    const zone = this._getFloorZone(waveSystem?.currentWave || 1);
+    const texture = _floorsReady ? floorTextures[zone] : null;
 
-    const gridSize = 64;
-    const halfW = viewWidth / 2 / camera.zoom;
-    const halfH = viewHeight / 2 / camera.zoom;
-    const startX = Math.floor((camera.x - halfW) / gridSize) * gridSize;
-    const startY = Math.floor((camera.y - halfH) / gridSize) * gridSize;
-    const endX = startX + viewWidth / camera.zoom + gridSize * 2;
-    const endY = startY + viewHeight / camera.zoom + gridSize * 2;
+    if (texture && texture.complete && texture.naturalWidth > 0) {
+      // Tiled floor texture
+      const gridSize = 128;
+      const halfW = viewWidth / 2 / camera.zoom;
+      const halfH = viewHeight / 2 / camera.zoom;
+      const startX = Math.floor((camera.x - halfW) / gridSize) * gridSize;
+      const startY = Math.floor((camera.y - halfH) / gridSize) * gridSize;
+      const endX = startX + viewWidth / camera.zoom + gridSize * 2;
+      const endY = startY + viewHeight / camera.zoom + gridSize * 2;
 
-    for (let x = startX; x < endX; x += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo(x, startY);
-      ctx.lineTo(x, endY);
-      ctx.stroke();
+      for (let x = startX; x < endX; x += gridSize) {
+        for (let y = startY; y < endY; y += gridSize) {
+          ctx.drawImage(texture, x, y, gridSize, gridSize);
+        }
+      }
+    } else {
+      // Fallback: subtle gold grid
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 215, 0, 0.03)';
+      ctx.lineWidth = 0.5 / camera.zoom;
+
+      const gridSize = 64;
+      const halfW = viewWidth / 2 / camera.zoom;
+      const halfH = viewHeight / 2 / camera.zoom;
+      const startX = Math.floor((camera.x - halfW) / gridSize) * gridSize;
+      const startY = Math.floor((camera.y - halfH) / gridSize) * gridSize;
+      const endX = startX + viewWidth / camera.zoom + gridSize * 2;
+      const endY = startY + viewHeight / camera.zoom + gridSize * 2;
+
+      for (let x = startX; x < endX; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, startY);
+        ctx.lineTo(x, endY);
+        ctx.stroke();
+      }
+      for (let y = startY; y < endY; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(startX, y);
+        ctx.lineTo(endX, y);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
-    for (let y = startY; y < endY; y += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo(startX, y);
-      ctx.lineTo(endX, y);
-      ctx.stroke();
-    }
-    ctx.restore();
   }
 
   // ── Enemies ──────────────────────────────────────────────────
 
   _drawEnemies(ctx, enemies, game) {
+    // Viewport cull — only draw what's on screen (plus a margin).
+    const zoom = (game.camera && game.camera.zoom) || 1;
+    const half = Math.max(this.displayWidth, this.displayHeight) / 2 / zoom + 80;
+    const camX = (game.camera && game.camera.x) || 0;
+    const camY = (game.camera && game.camera.y) || 0;
+    const px = (game.player && game.player.x) || 0;
+    const py = (game.player && game.player.y) || 0;
+
     for (const enemy of enemies) {
+      if (Math.abs(enemy.x - camX) > half || Math.abs(enemy.y - camY) > half) continue;
+
       const def = enemy.def || {};
       const r = enemy.radius;
+      const color = enemy.color || def.color || '#7b1fa2';
 
-      // Shadow
-      ctx.save();
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-      ctx.beginPath();
-      ctx.ellipse(enemy.x, enemy.y + r * 0.7, r * 0.8, r * 0.3, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-
-      // Boss spikes (radial crown behind the body)
-      if (def.spikes) {
-        ctx.save();
-        ctx.fillStyle = def.color || '#6a1b9a';
-        ctx.shadowColor = def.color || '#6a1b9a';
-        ctx.shadowBlur = 8;
-        const spikes = 8;
-        for (let i = 0; i < spikes; i++) {
-          const a = (i / spikes) * Math.PI * 2;
-          const aL = a - 0.16, aR = a + 0.16;
-          ctx.beginPath();
-          ctx.moveTo(enemy.x + Math.cos(aL) * r, enemy.y + Math.sin(aL) * r);
-          ctx.lineTo(enemy.x + Math.cos(a) * (r + r * 0.45), enemy.y + Math.sin(a) * (r + r * 0.45));
-          ctx.lineTo(enemy.x + Math.cos(aR) * r, enemy.y + Math.sin(aR) * r);
-          ctx.closePath();
-          ctx.fill();
-        }
-        ctx.restore();
+      // Baked body (shadow + spikes/horns + glow), or live fallback
+      const sprite = this._enemySprite(enemy.enemyType || 'enemy', r, def, color);
+      if (sprite) {
+        ctx.drawImage(sprite.canvas, enemy.x - sprite.half, enemy.y - sprite.half);
+      } else {
+        this._drawEnemyBody(ctx, enemy, def, color);
       }
 
-      // Medium-tier horns (minotaur)
-      if (def.horns) {
-        ctx.save();
-        ctx.fillStyle = def.bodyColor || def.color || '#4e342e';
-        const hornW = r * 0.34, hornH = r * 0.75;
-        for (const side of [-1, 1]) {
-          const bx = enemy.x + side * r * 0.55;
-          ctx.beginPath();
-          ctx.moveTo(bx - hornW / 2, enemy.y - r * 0.45);
-          ctx.lineTo(bx + side * hornW * 0.4, enemy.y - r * 0.45 - hornH);
-          ctx.lineTo(bx + hornW / 2, enemy.y - r * 0.6);
-          ctx.closePath();
-          ctx.fill();
-        }
-        ctx.restore();
-      }
-
-      // Body
-      ctx.save();
-      ctx.fillStyle = enemy.color || def.color || '#7b1fa2';
-      ctx.shadowColor = enemy.color || def.color || '#7b1fa2';
-      ctx.shadowBlur = 6;
-      ctx.beginPath();
-      ctx.arc(enemy.x, enemy.y, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-
-      // Inner detail (darker center for underworld look)
-      ctx.save();
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-      ctx.beginPath();
-      ctx.arc(enemy.x, enemy.y, enemy.radius * 0.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-
-      // Eyes (glowing red/orange; Cerberus has three)
+      // Eyes (live: track the player; Cerberus has three)
       const eyeSize = Math.max(2, r * 0.2);
       const eyeOffset = r * 0.35;
-      const eyeAngle = Math.atan2(
-        game.player.y - enemy.y,
-        game.player.x - enemy.x
-      );
+      const eyeAngle = Math.atan2(py - enemy.y, px - enemy.x);
       const eyeOffsets = def.threeEyes ? [-0.5, 0, 0.5] : [-0.4, 0.4];
 
-      ctx.save();
-      ctx.fillStyle = def.threeEyes ? '#00e676' : '#ff6f00';
-      ctx.shadowColor = def.threeEyes ? '#00e676' : '#ff6f00';
+      const eyeColor = def.threeEyes ? '#00e676' : '#ff6f00';
+      ctx.fillStyle = eyeColor;
+      ctx.shadowColor = eyeColor;
       ctx.shadowBlur = 4;
       for (const off of eyeOffsets) {
         ctx.beginPath();
@@ -259,7 +258,7 @@ class Renderer {
         );
         ctx.fill();
       }
-      ctx.restore();
+      ctx.shadowBlur = 0;
 
       // Health bar (if damaged)
       if (enemy.health < enemy.maxHealth) {
@@ -286,7 +285,220 @@ class Renderer {
         ctx.stroke();
         ctx.restore();
       }
+
+      // Stunned (Zeus Thunder Barrier)
+      if (enemy.stunTimer > 0) {
+        ctx.save();
+        ctx.fillStyle = '#ffd700';
+        ctx.shadowColor = '#ffd700';
+        ctx.shadowBlur = 6;
+        ctx.font = `${Math.max(11, Math.round(r * 0.9))}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('⚡', enemy.x, enemy.y - r - 20);
+        ctx.textBaseline = 'alphabetic';
+        ctx.textAlign = 'left';
+        ctx.restore();
+      }
     }
+  }
+
+  /**
+   * Bake one enemy variant (shadow, spikes, horns, glowing body, inner
+   * detail) to an offscreen canvas. Only the per-frame parts (eyes,
+   * health bar, boss ring, stun) are drawn live.
+   */
+  _enemySprite(type, r, def, color) {
+    const key = `${type}:${Math.round(r)}:${color}`;
+    const cached = this._enemySprites.get(key);
+    if (cached) return cached;
+    if (typeof document === 'undefined' || !document.createElement) return null;
+
+    const half = Math.ceil(r * 1.5 + 12); // margin for glow/spikes/shadow
+    const canvas = document.createElement('canvas');
+    canvas.width = half * 2;
+    canvas.height = half * 2;
+    const g = canvas.getContext('2d');
+    const cx = half, cy = half;
+
+    // Ground shadow
+    g.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    g.beginPath();
+    g.ellipse(cx, cy + r * 0.7, r * 0.8, r * 0.3, 0, 0, Math.PI * 2);
+    g.fill();
+
+    // Boss spikes (radial crown behind the body)
+    if (def.spikes) {
+      g.fillStyle = color;
+      g.shadowColor = color;
+      g.shadowBlur = 8;
+      const spikes = 8;
+      for (let i = 0; i < spikes; i++) {
+        const a = (i / spikes) * Math.PI * 2;
+        const aL = a - 0.16, aR = a + 0.16;
+        g.beginPath();
+        g.moveTo(cx + Math.cos(aL) * r, cy + Math.sin(aL) * r);
+        g.lineTo(cx + Math.cos(a) * (r + r * 0.45), cy + Math.sin(a) * (r + r * 0.45));
+        g.lineTo(cx + Math.cos(aR) * r, cy + Math.sin(aR) * r);
+        g.closePath();
+        g.fill();
+      }
+      g.shadowBlur = 0;
+    }
+
+    // Medium-tier horns (minotaur)
+    if (def.horns) {
+      g.fillStyle = def.bodyColor || color;
+      const hornW = r * 0.34, hornH = r * 0.75;
+      for (const side of [-1, 1]) {
+        const bx = cx + side * r * 0.55;
+        g.beginPath();
+        g.moveTo(bx - hornW / 2, cy - r * 0.45);
+        g.lineTo(bx + side * hornW * 0.4, cy - r * 0.45 - hornH);
+        g.lineTo(bx + hornW / 2, cy - r * 0.6);
+        g.closePath();
+        g.fill();
+      }
+    }
+
+    // Glowing body (the expensive blur, baked once)
+    g.fillStyle = color;
+    g.shadowColor = color;
+    g.shadowBlur = 8;
+    g.beginPath();
+    g.arc(cx, cy, r, 0, Math.PI * 2);
+    g.fill();
+    g.shadowBlur = 0;
+
+    // Inner detail (darker center for underworld look)
+    g.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    g.beginPath();
+    g.arc(cx, cy, r * 0.5, 0, Math.PI * 2);
+    g.fill();
+
+    const sprite = { canvas, half };
+    this._enemySprites.set(key, sprite);
+    return sprite;
+  }
+
+  /** Live fallback for environments without an offscreen canvas. */
+  _drawEnemyBody(ctx, enemy, def, color) {
+    const r = enemy.radius;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.ellipse(enemy.x, enemy.y + r * 0.7, r * 0.8, r * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(enemy.x, enemy.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.arc(enemy.x, enemy.y, r * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ── Ability visuals ────────────────────────────────────────────
+
+  _drawZones(ctx, zones) {
+    for (const z of zones) {
+      const fade = Math.max(0, Math.min(1, z.duration / 0.5));
+      ctx.save();
+      ctx.globalAlpha = 0.14 * fade;
+      ctx.fillStyle = z.color;
+      ctx.beginPath();
+      ctx.arc(z.x, z.y, z.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.45 * fade;
+      ctx.strokeStyle = z.color;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 6]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }
+
+  _drawRings(ctx, rings) {
+    for (const ring of rings) {
+      const p = Math.max(0, Math.min(1, ring.progress));
+      const rad = 12 + (ring.maxRadius - 12) * p;
+      ctx.save();
+      ctx.globalAlpha = (1 - p) * 0.9;
+      ctx.strokeStyle = ring.color;
+      ctx.lineWidth = ring.width || 6;
+      ctx.shadowColor = ring.color;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(ring.x, ring.y, rad, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  _drawAbilityButton(ctx, game) {
+    const ab = game.abilitySystem;
+    if (!ab || !game.player) return;
+    const b = game.input.abilityButtonRect();
+    const color = ab.ability.color;
+    const ready = ab.ready;
+
+    ctx.save();
+    // Base disc
+    ctx.fillStyle = 'rgba(10, 12, 24, 0.72)';
+    ctx.beginPath();
+    ctx.arc(b.cx, b.cy, b.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Cooldown sweep (dark wedge = time remaining, from 12 o'clock)
+    if (!ready && ab.cooldownTotal > 0) {
+      const frac = Math.max(0, Math.min(1, ab.cooldownRemaining / ab.cooldownTotal));
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.beginPath();
+      ctx.moveTo(b.cx, b.cy);
+      ctx.arc(b.cx, b.cy, b.r, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Ring — glows + pulses when ready
+    const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 300);
+    ctx.globalAlpha = ready ? 0.55 + pulse * 0.45 : 0.4;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = ready ? 14 : 4;
+    ctx.beginPath();
+    ctx.arc(b.cx, b.cy, b.r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+
+    // Icon
+    ctx.fillStyle = ready ? color : 'rgba(255, 255, 255, 0.4)';
+    ctx.font = `${Math.round(b.r * 1.05)}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ab.ability.icon, b.cx, b.cy + 1);
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+
+    // First-run label
+    if (game.hintTimer > 0) {
+      ctx.globalAlpha = Math.min(1, game.hintTimer / 1.5) * 0.9;
+      ctx.fillStyle = color;
+      ctx.font = `bold ${Math.round(Math.min(12, b.r * 0.42))}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText('ABILITY', b.cx, b.cy - b.r - 8);
+      ctx.textAlign = 'left';
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
   }
 
   // ── Player ───────────────────────────────────────────────────

@@ -8,9 +8,10 @@ function vibrate(pattern) {
 }
 
 export default {
-  tap:   () => vibrate(8),
-  hit:   () => vibrate([30, 30, 30]),
-  wave:  () => vibrate(18),
-  boss:  () => vibrate([60, 80, 60, 80, 140]),
-  death: () => vibrate([70, 50, 70, 50, 120]),
+  tap:      () => vibrate(8),
+  hit:      () => vibrate([30, 30, 30]),
+  wave:     () => vibrate(18),
+  boss:     () => vibrate([60, 80, 60, 80, 140]),
+  death:    () => vibrate([70, 50, 70, 50, 120]),
+  ability:  () => vibrate([25, 20, 40]),
 };

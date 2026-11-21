@@ -52,6 +52,22 @@ class EntityManager {
       }
     }
 
+    // Keep the spatial grid current: entities move every frame, so
+    // re-home any that crossed into a new cell (stale cells make
+    // getNearby/auto-aim miss).
+    for (const entity of this.entities.values()) {
+      if (typeof entity.x !== 'number' || typeof entity.y !== 'number') continue;
+      const cx = Math.floor(entity.x / this.gridSize);
+      const cy = Math.floor(entity.y / this.gridSize);
+      if (entity._cx === cx && entity._cy === cy) continue;
+      if (entity._cx !== undefined) this._gridRemove(entity);
+      entity._cx = cx;
+      entity._cy = cy;
+      const key = this._gridKey(cx, cy);
+      if (!this.grid.has(key)) this.grid.set(key, []);
+      this.grid.get(key).push(entity);
+    }
+
     // Process removes
     for (const id of this.toRemove) {
       const entity = this.entities.get(id);
@@ -69,6 +85,8 @@ class EntityManager {
   _gridInsert(entity) {
     const cx = Math.floor(entity.x / this.gridSize);
     const cy = Math.floor(entity.y / this.gridSize);
+    entity._cx = cx;
+    entity._cy = cy;
     const key = this._gridKey(cx, cy);
     if (!this.grid.has(key)) this.grid.set(key, []);
     this.grid.get(key).push(entity);
