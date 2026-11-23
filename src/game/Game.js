@@ -99,6 +99,17 @@ class Game {
     window.addEventListener('resize', () => this._resize());
     this.stateMachine.enter('menu');
     requestAnimationFrame((ts) => this._loop(ts));
+    this._registerServiceWorker();
+  }
+
+  // PWA: offline shell + installability. Prod builds only (import.meta.env is
+  // undefined in bare Node → skipped by the headless smoke test).
+  _registerServiceWorker() {
+    if (!import.meta.env?.PROD) return;
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const register = () => navigator.serviceWorker.register('./sw.js').catch(() => {});
+    if (document.readyState === 'complete') register();
+    else window.addEventListener('load', register, { once: true });
   }
 
   _resize() {
