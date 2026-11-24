@@ -242,21 +242,96 @@ const fired = game.entityManager.getByType('projectile').length;
 assert.ok(fired > 0, `auto-aim fired (${fired} projectiles)`);
 console.log('✓ auto-aim fires at nearest enemy');
 
-// ── Upgrade select ──
-game.waveSystem.betweenWaves = true;
-game.waveSystem.waveDelay = 0;
-game.waveSystem.enemiesRemaining = 0;
-game.waveSystem.spawnQueue.length = 0;
+// ── XP orbs + leveling (kills → orbs → level up → blessing screen) ──
+const ws = game.waveSystem;
+// Test hygiene: clear stray orbs/XP from the combat tests above
+for (const o of em.getByType('xp')) em.remove(o.id);
+em.update(0.016);
+game.levelSystem.xp = 0;
+game.levelSystem.pending = 0;
+
+// Kills drop orbs that drift toward the player and are collected on contact
+assert.strictEqual(em.getByType('xp').length, 0, 'no stray orbs');
+ws._spawnXpOrb(50, 0, 1);
+em.update(0.016); // commit deferred add (orb may already be drifting in)
+assert.strictEqual(em.getByType('xp').length, 1, 'xp orb spawns');
+const orb = em.getByType('xp')[0];
+assert.strictEqual(orb.value, 1, 'orb carries the xp value');
+orb.x = 0; orb.y = 0; // teleport onto the player
+em.update(0.016);
+assert.ok(!em.getByType('xp').includes(orb), 'orb collected on contact');
+assert.strictEqual(game.levelSystem.xp, 1, 'xp banked');
+
+// Big XP gain → level up → blessing screen
+game.levelSystem.addXp(100);
+assert.ok(game.levelSystem.pending >= 1, 'level-up(s) queued');
 step(20);
-assert.strictEqual(game.stateMachine.name, 'upgradeSelect', 'wave end → upgrade select');
-const U = game.stateMachine.states.upgradeSelect._layout();
+assert.strictEqual(game.stateMachine.name, 'upgradeSelect', 'level up → blessing screen');
+const us = game.stateMachine.states.upgradeSelect;
+const U = us._layout();
 assert.ok(U.compact, 'compact layout on phone');
+// Deterministic pick (skip random field/new-god cards for this assertion)
+const { UPGRADES } = await import('../src/data/blessings.js');
+const zeusFury = UPGRADES.find((u) => u.id === 'zeus_fury');
+us.options = [zeusFury, zeusFury, zeusFury];
+us.hoveredIdx = -1;
+game.levelSystem.pending = 1; // exactly one queued pick
 fire('touchstart', U.cards[1].x + 10, U.cards[1].y + 10);
-assert.strictEqual(game.stateMachine.name, 'playing', 'blessing selected');
-console.log('✓ upgrade select (stacked cards)');
+assert.strictEqual(game.stateMachine.name, 'playing', 'blessing selected → back to playing');
+assert.strictEqual(game.levelSystem.pending, 0, 'pick queue drained');
+console.log('✓ xp orbs + leveling → blessing screen');
+
+// ── Wave end: breather, then auto next wave (no card screen) ──
+const waveBefore = ws.currentWave;
+ws.betweenWaves = true;
+ws.waveDelay = 0;
+ws.enemiesRemaining = 0;
+ws.spawnQueue.length = 0;
+step(20);
+assert.strictEqual(game.stateMachine.name, 'playing', 'wave end stays in playing (no card screen)');
+assert.ok(ws.currentWave >= waveBefore + 1, `next wave auto-started (now wave ${ws.currentWave})`);
+console.log('✓ wave auto-advance');
+
+// ── Field consumables: turrets + mines ──
+const fs = game.fieldSystem;
+fs.clear();
+fs.deployTurrets(2, 0, 0);
+assert.strictEqual(fs.turrets.length, 2, 'deployed 2 turrets');
+fs.deployTurrets(5, 0, 0);
+assert.strictEqual(fs.turrets.length, 3, 'turret cap of 3 (oldest rotated out)');
+const tVictim = em.create({ type: 'enemy', def: { color: '#fff' }, x: 100, y: 0, radius: 10, health: 99999, maxHealth: 99999, pushbackX: 0, pushbackY: 0 });
+em.update(0.016);
+let sawShot = false;
+for (let i = 0; i < 90 && !sawShot; i++) {
+  fs.update(1 / 60);
+  em.update(1 / 60);
+  sawShot = em.getByType('projectile').some((p) => p.projectileType === 'turret');
+}
+assert.ok(sawShot, 'turret acquires target and fires');
+const tHp = tVictim.health;
+step(60); // full frames: bullet flight + collision resolution
+assert.ok(tVictim.health < tHp, `turret shot connected (hp ${tVictim.health})`);
+
+fs.clear();
+fs.deployMines(1, 0, 0);
+assert.strictEqual(fs.mines.length, 1, 'deployed a mine');
+const mine = fs.mines[0];
+// 99999hp: stray Hades burn-zone damage from the ability tests above also
+// ticks this spot, so keep the victim unkillable (no stray XP orbs).
+const mVictim = em.create({ type: 'enemy', def: { color: '#fff' }, x: mine.x, y: mine.y, radius: 10, health: 99999, maxHealth: 99999, pushbackX: 0, pushbackY: 0 });
+em.update(0.016);
+for (let i = 0; i < 120 && fs.mines.length > 0; i++) {
+  fs.update(1 / 60);
+  em.update(1 / 60);
+}
+assert.strictEqual(fs.mines.length, 0, 'mine detonated on contact');
+assert.ok(mVictim.health < 99999, `blast dealt damage (hp ${mVictim.health})`);
+fs.deployMines(6, 0, 0);
+assert.strictEqual(fs.mines.length, 4, 'mine cap of 4 (oldest rotated out)');
+fs.clear();
+console.log('✓ field consumables (turrets + mines)');
 
 // ── Boss wave (wave 10 → Hydra, scaled + announced) ──
-const ws = game.waveSystem;
 ws.currentWave = 9;
 ws.startWave();
 assert.ok(ws.banner && ws.banner.text.includes('HYDRA'), 'boss banner announces Hydra');
@@ -293,6 +368,23 @@ assert.ok(game.player.invincible, 'i-frames granted after hit');
 console.log('✓ contact damage (finite, real value)');
 
 // ── Game over via boss contact kill ──
+// Test hygiene: combat above can legitimately queue a level-up (a stray enemy
+// dies near the player → XP orb → blessing screen). Drain it so the world
+// keeps simulating for this assertion.
+{
+  game.levelSystem.pending = 0;
+  game.levelSystem.xp = 0;
+  for (const o of em.getByType('xp')) em.remove(o.id);
+  em.update(0.016); // commit orb removals
+  while (game.stateMachine.name === 'upgradeSelect') {
+    game.levelSystem.pending = 1; // exactly one pick to clear
+    const us2 = game.stateMachine.states.upgradeSelect;
+    us2.options = [zeusFury, zeusFury, zeusFury];
+    const U3 = us2._layout();
+    fire('touchstart', U3.cards[0].x + 10, U3.cards[0].y + 10);
+  }
+  assert.strictEqual(game.stateMachine.name, 'playing', 'drained queued blessing → back in playing');
+}
 const boss2 = game.entityManager.getByType('enemy').find((e) => e.isBoss);
 game.player.invincible = false;
 game.player.invincibleTimer = 0;

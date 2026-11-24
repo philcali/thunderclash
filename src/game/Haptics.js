@@ -14,4 +14,5 @@ export default {
   boss:     () => vibrate([60, 80, 60, 80, 140]),
   death:    () => vibrate([70, 50, 70, 50, 120]),
   ability:  () => vibrate([25, 20, 40]),
+  explosion: () => vibrate([40, 30, 60]),
 };

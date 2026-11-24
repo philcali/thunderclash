@@ -44,7 +44,7 @@ class UpgradeSystem {
     return options;
   }
 
-  selectUpgrade(upgradeId, player) {
+  selectUpgrade(upgradeId, player, game) {
     const upgrade = UPGRADES.find(u => u.id === upgradeId);
     if (!upgrade) return null;
 
@@ -62,7 +62,7 @@ class UpgradeSystem {
       }
     }
 
-    upgrade.apply(player);
+    upgrade.apply(player, game);
     this.selectedUpgrades.push(upgrade);
     return upgrade;
   }

@@ -116,6 +116,30 @@ export const UPGRADES = [
     maxStacks: 10,
   },
   {
+    id: 'hephaestus_foundry',
+    name: "Hephaestus's Foundry",
+    description: 'Deploy 2 turrets (last 30s)',
+    icon: '⚙',
+    color: '#ff9800',
+    apply: (player, game) => {
+      game.fieldSystem.deployTurrets(2, player.x, player.y);
+    },
+    stackable: true,
+    maxStacks: 4,
+  },
+  {
+    id: 'ares_spike_trap',
+    name: "Ares's Spike Trap",
+    description: 'Deploy 4 landmines (last 20s)',
+    icon: '💥',
+    color: '#ff5722',
+    apply: (player, game) => {
+      game.fieldSystem.deployMines(4, player.x, player.y);
+    },
+    stackable: true,
+    maxStacks: 4,
+  },
+  {
     id: 'new_god',
     name: 'New God',
     description: 'Unlock a new Olympian god',

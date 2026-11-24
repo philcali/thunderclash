@@ -59,12 +59,11 @@ class WaveSystem {
     }
 
     if (this.betweenWaves) {
+      // Breather between waves — the next wave auto-starts after the delay.
       this.waveDelay -= dt;
       if (this.waveDelay <= 0) {
-        // Don't re-trigger if already on upgrade screen.
-        if (this.game.stateMachine.name !== 'upgradeSelect') {
-          this.game.stateMachine.enter('upgradeSelect');
-        }
+        this.betweenWaves = false;
+        this.startWave();
       }
       return;
     }
@@ -217,10 +216,48 @@ class WaveSystem {
     this.enemiesRemaining--;
     this.game.score.addKill(enemy && enemy.def);
 
+    // XP drops as a small orb that flies to the player
+    if (enemy && this.game.levelSystem) {
+      this._spawnXpOrb(enemy.x, enemy.y, (enemy.def && enemy.def.xp) || 1);
+    }
+
     // Cerberus: on death it splits into two fast hellhounds
     if (enemy && enemy.def && enemy.def.onDeath === 'spawn_dogs') {
       this._spawnHellhounds(enemy.x, enemy.y);
     }
+  }
+
+  /** XP orb: drifts, then accelerates toward the player when near. */
+  _spawnXpOrb(x, y, value) {
+    const em = this.manager;
+    const g = this.game;
+    const orbs = em.getByType('xp');
+    if (orbs.length >= 40) {
+      // Cap active orbs: merge into the nearest one to keep the grid light
+      let best = orbs[0], bd = Infinity;
+      for (const o of orbs) {
+        const d = (o.x - x) * (o.x - x) + (o.y - y) * (o.y - y);
+        if (d < bd) { bd = d; best = o; }
+      }
+      best.value += value;
+      return;
+    }
+    const orb = em.create({ type: 'xp', x, y, value, r: Math.min(7, 3 + value * 0.25) });
+    orb.update = (dt) => {
+      const p = g.player;
+      if (!p) return;
+      const dx = p.x - orb.x, dy = p.y - orb.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      if (d < 90) {
+        orb.vel = Math.min(620, (orb.vel || 0) + 2600 * dt);
+        orb.x += (dx / d) * orb.vel * dt;
+        orb.y += (dy / d) * orb.vel * dt;
+      }
+      if (d < 16) {
+        g.levelSystem.addXp(orb.value);
+        em.remove(orb.id);
+      }
+    };
   }
 
   _spawnHellhounds(x, y) {

@@ -13,6 +13,7 @@ export const ENEMY_TYPES = {
     bodyColor: '#757575',
     behavior: 'chase',
     score: 10,
+    xp: 1,  // experience dropped on death
     tier: 1,
   },
   shade: {
@@ -25,6 +26,7 @@ export const ENEMY_TYPES = {
     bodyColor: '#4a148c',
     behavior: 'phase',
     score: 15,
+    xp: 2,  // experience dropped on death
     tier: 1,
   },
   harpy: {
@@ -37,6 +39,7 @@ export const ENEMY_TYPES = {
     bodyColor: '#3e2723',
     behavior: 'fly',
     score: 20,
+    xp: 2,  // experience dropped on death
     tier: 1,
   },
   hellhound: {
@@ -49,6 +52,7 @@ export const ENEMY_TYPES = {
     bodyColor: '#7f2208',
     behavior: 'chase',
     score: 12,
+    xp: 1,  // experience dropped on death
     tier: 1,
   },
   minotaur: {
@@ -61,6 +65,7 @@ export const ENEMY_TYPES = {
     bodyColor: '#4e342e',
     behavior: 'chase',
     score: 40,
+    xp: 5,  // experience dropped on death
     tier: 2,
     horns: true,
   },
@@ -74,6 +79,7 @@ export const ENEMY_TYPES = {
     bodyColor: '#263238',
     behavior: 'chase',
     score: 30,
+    xp: 8,  // experience dropped on death
     tier: 2,
     threeEyes: true,
     onDeath: 'spawn_dogs',
@@ -88,6 +94,7 @@ export const ENEMY_TYPES = {
     bodyColor: '#4a148c',
     behavior: 'boss',
     score: 500,
+    xp: 40,  // experience dropped on death
     tier: 3,
     isBoss: true,
     spikes: true,
@@ -102,6 +109,7 @@ export const ENEMY_TYPES = {
     bodyColor: '#33691e',
     behavior: 'boss',
     score: 800,
+    xp: 60,  // experience dropped on death
     tier: 3,
     isBoss: true,
     spikes: true,

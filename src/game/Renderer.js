@@ -4,6 +4,8 @@
  *
  * All coordinates are CSS pixels (the DPR base transform is set by Game._resize).
  */
+import { TURRET, MINE } from '../systems/FieldSystem.js';
+
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 class Renderer {
@@ -70,6 +72,9 @@ class Renderer {
     // Ability zones (ground layer, under everything)
     this._drawZones(ctx, zones);
 
+    // Field consumables — turrets & mines (ground layer)
+    this._drawField(ctx, game);
+
     // Draw enemies (behind player)
     this._drawEnemies(ctx, enemies, game);
 
@@ -78,6 +83,9 @@ class Renderer {
 
     // Draw projectiles
     this._drawProjectiles(ctx, projectiles);
+
+    // XP orbs (glowing pickups)
+    this._drawXpOrbs(ctx, entityManager.getByType('xp'));
 
     // Ability shockwave rings (above projectiles)
     this._drawRings(ctx, rings);
@@ -444,6 +452,110 @@ class Renderer {
     }
   }
 
+  /** XP orbs — small glowing cyan/gold pickups that fly to the player. */
+  _drawXpOrbs(ctx, orbs) {
+    for (const orb of orbs) {
+      const r = orb.r || 4;
+      ctx.save();
+      ctx.shadowColor = '#00e5ff';
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = '#00e5ff';
+      ctx.beginPath();
+      ctx.arc(orb.x, orb.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      ctx.save();
+      ctx.fillStyle = '#fff';
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath();
+      ctx.arc(orb.x, orb.y, r * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  /** Field consumables — turrets (auto-turrets) and mines (spike traps). */
+  _drawField(ctx, game) {
+    const f = game.fieldSystem;
+    if (!f) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+
+    for (const t of f.turrets) {
+      const fade = Math.min(1, t.life / 5);
+      ctx.save();
+      ctx.globalAlpha = fade;
+      // Base
+      ctx.fillStyle = '#37474f';
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#607d8b';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      // Barrel
+      const c = Math.cos(t.angle), s = Math.sin(t.angle);
+      ctx.strokeStyle = '#ffb74d';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(t.x, t.y);
+      ctx.lineTo(t.x + c * 16, t.y + s * 16);
+      ctx.stroke();
+      // Muzzle flash
+      if (t.flash > 0) {
+        ctx.fillStyle = `rgba(255, 213, 79, ${Math.max(0, t.flash)})`;
+        ctx.beginPath();
+        ctx.arc(t.x + c * 16, t.y + s * 16, 6 * t.flash, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Life arc
+      ctx.strokeStyle = 'rgba(255, 152, 0, 0.7)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, 15, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (t.life / TURRET.life));
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    for (const m of f.mines) {
+      const armed = m.fuse <= 0;
+      const pulse = armed ? 0.5 + 0.5 * Math.sin(now / 150) : 0;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, m.life / 5);
+      // Spike disc
+      ctx.fillStyle = armed ? '#bf360c' : '#4e342e';
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, 7, 0, Math.PI * 2);
+      ctx.fill();
+      // Spikes
+      ctx.strokeStyle = armed ? `rgba(255, 87, 34, ${0.5 + 0.5 * pulse})` : '#795548';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(m.x + Math.cos(a) * 7, m.y + Math.sin(a) * 7);
+        ctx.lineTo(m.x + Math.cos(a) * 11, m.y + Math.sin(a) * 11);
+        ctx.stroke();
+      }
+      // Trigger radius hint (armed only)
+      if (armed) {
+        ctx.strokeStyle = 'rgba(255, 87, 34, 0.18)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 6]);
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, MINE.triggerRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // Life arc
+      ctx.strokeStyle = 'rgba(255, 87, 34, 0.5)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, 14, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (m.life / MINE.life));
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   _drawAbilityButton(ctx, game) {
     const ab = game.abilitySystem;
     if (!ab || !game.player) return;
@@ -792,8 +904,24 @@ class Renderer {
     ctx.textBaseline = 'middle';
     ctx.fillText(`${Math.ceil(player.health)} / ${player.maxHealth}`, barX + 4, barY + barH / 2);
 
-    // Shield bar (below health)
+    // XP bar (thin, below health)
     let belowY = barY + barH + 6 * s;
+    if (game.levelSystem) {
+      const xpBarH = 7 * s;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      ctx.fillRect(barX - 1, belowY - 1, barW + 2, xpBarH + 2);
+      ctx.fillStyle = '#01313a';
+      ctx.fillRect(barX, belowY, barW, xpBarH);
+      ctx.fillStyle = '#00e5ff';
+      ctx.fillRect(barX, belowY, barW * game.levelSystem.progress, xpBarH);
+      ctx.fillStyle = '#b2ebf2';
+      ctx.font = `${Math.round(8 * s)}px monospace`;
+      ctx.textAlign = 'left';
+      ctx.fillText(`LV ${game.levelSystem.level}`, barX + 4, belowY + xpBarH / 2);
+      belowY += xpBarH + 8 * s;
+    }
+
+    // Shield bar (below XP)
     if (player.shield > 0) {
       const shieldBarH = 7 * s;
       ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';

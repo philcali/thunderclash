@@ -11,6 +11,8 @@ import AbilitySystem from '../systems/AbilitySystem.js';
 import WaveSystem from '../systems/WaveSystem.js';
 import ScoreSystem from '../systems/ScoreSystem.js';
 import UpgradeSystem from '../systems/UpgradeSystem.js';
+import LevelSystem from '../systems/LevelSystem.js';
+import FieldSystem from '../systems/FieldSystem.js';
 import CollisionSystem from '../systems/CollisionSystem.js';
 import Player from '../entities/Player.js';
 import Haptics from './Haptics.js';
@@ -141,6 +143,17 @@ class MenuState {
     const selectedGod = this.availableGods[this.selectedGod];
     this.game.selectedGodIndex = this.game.gods.findIndex(g => g.id === selectedGod.id);
     Haptics.tap();
+    // Drop the previous run's state so PlayingState fully re-initializes
+    // (fresh player, wave 1, clean XP/field/upgrade state).
+    this.game.player = null;
+    this.game.entityManager = null;
+    this.game.weaponSystem = null;
+    this.game.abilitySystem = null;
+    this.game.waveSystem = null;
+    this.game.score = null;
+    this.game.upgradeSystem = null;
+    this.game.levelSystem = null;
+    this.game.fieldSystem = null;
     this.game.stateMachine.enter('playing');
   }
 
@@ -338,9 +351,10 @@ class PlayingState {
 
   enter() {
     // Only initialize on first enter (actual game start).
-    // On subsequent enters (returning from upgrade selection), the player
-    // and subsystems already exist with upgrades/stats intact.
-    if (!this.game.player) {
+    // On subsequent enters (returning from the blessing screen), the
+    // player and subsystems already exist with upgrades/stats intact.
+    const fresh = !this.game.player;
+    if (fresh) {
       // Reset game state
       const god = this.game.gods[this.game.selectedGodIndex];
       this.game.player = new Player(god);
@@ -353,6 +367,8 @@ class PlayingState {
       this.game.waveSystem = new WaveSystem(this.game.entityManager, this.game);
       this.game.score = new ScoreSystem();
       this.game.upgradeSystem = new UpgradeSystem();
+      this.game.levelSystem = new LevelSystem();
+      this.game.fieldSystem = new FieldSystem(this.game);
       this.game.selectedGodIndex = this.game.selectedGodIndex;
 
       // Handle pending god switch (from blessing selection)
@@ -367,9 +383,10 @@ class PlayingState {
       this.game.input.resetTouchSticks();
     }
 
-    // Start the next wave whenever we return to playing (game start or
-    // after upgrade selection).
-    if (this.game.waveSystem) {
+    // Fresh game (started from the menu): launch wave 1. Returning from
+    // the blessing screen resumes the flow — WaveSystem owns betweenWaves
+    // and auto-starts the next wave after its breather.
+    if (fresh && this.game.waveSystem) {
       this.game.waveSystem.betweenWaves = false;
       this.game.waveSystem.startWave();
     }
@@ -377,6 +394,8 @@ class PlayingState {
 
   update(dt) {
     const { player, input, camera, entityManager, weaponSystem, waveSystem, score, renderer } = this.game;
+    const levelSystem = this.game.levelSystem;
+    const fieldSystem = this.game.fieldSystem;
 
     // Control-hint countdown
     if (this.game.hintTimer > 0) {
@@ -419,13 +438,11 @@ class PlayingState {
       if (input.consumeAbilityPress()) abilitySystem.tryActivate();
     }
 
+    // Field consumables (turrets / mines)
+    if (fieldSystem) fieldSystem.update(dt);
+
     // Update wave system
     waveSystem.update(dt);
-
-    // If the wave ended and the state machine switched to upgradeSelect,
-    // stop updating the playing scene — the upgrade screen was already
-    // drawn on this frame and renderer.render() would overwrite it.
-    if (this.game.stateMachine.name !== 'playing') return;
 
     // Update score
     score.update(dt);
@@ -449,10 +466,15 @@ class PlayingState {
     // Check game over
     if (player.health <= 0) {
       this.game.stateMachine.enter('gameOver');
+      return;
     }
 
-    // No between-waves logic here — WaveSystem.update() owns the
-    // wave delay timer and the upgrade screen transition.
+    // Level up → blessing pick. The world pauses on the card screen;
+    // queued level-ups are resolved one card-pick at a time.
+    if (levelSystem && levelSystem.pending > 0) {
+      this.game.stateMachine.enter('upgradeSelect');
+      return;
+    }
 
     // Render
     renderer.render(this.game);
@@ -546,12 +568,25 @@ class UpgradeSelectState {
 
   _select(idx) {
     const upgrade = this.options[idx];
-    this.game.upgradeSystem.selectUpgrade(upgrade.id, this.game.player);
+    this.game.upgradeSystem.selectUpgrade(upgrade.id, this.game.player, this.game);
     Haptics.tap();
-    // Reset wave system so the next wave starts and the grace
-    // period timer resets (prevents immediate re-trigger).
-    this.game.waveSystem.betweenWaves = false;
-    this.game.waveSystem.waveDelay = 3;
+
+    // This pick satisfies one queued level-up. If more are queued,
+    // deal a fresh hand and stay; otherwise return to the fight.
+    const ls = this.game.levelSystem;
+    if (ls && ls.pending > 0) {
+      ls.pending--;
+      if (ls.pending > 0) {
+        this.options = this.game.upgradeSystem.generateOptions(
+          this.game.player,
+          this.game.upgradeSystem.selectedUpgrades.map(u => u.id)
+        );
+        this.hoveredIdx = -1;
+        this._draw();
+        return;
+      }
+    }
+
     this.game.stateMachine.enter('playing');
   }
 
@@ -647,7 +682,8 @@ class UpgradeSelectState {
     ctx.font = `bold ${Math.round(26 * s)}px monospace`;
     ctx.shadowColor = '#ffd700';
     ctx.shadowBlur = 10;
-    ctx.fillText('CHOOSE A BLESSING', w / 2, L.titleY);
+    const lv = this.game.levelSystem ? this.game.levelSystem.level : 1;
+    ctx.fillText(`LEVEL ${lv} — CHOOSE A BLESSING`, w / 2, L.titleY);
     ctx.shadowBlur = 0;
 
     const iconSize = compact ? 26 : 36;
